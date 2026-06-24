@@ -151,7 +151,7 @@ namespace {
         return authIt == g_processAuth.end() ? nullptr : &authIt->second;
     }
 
-    void EnsureScanned(ProcessAuth& auth, const ProcessKey& process) {
+    void EnsureScanned(ProcessAuth& auth, const ProcessKey& process, AppId_t appId) {
         if (auth.scanned) {
             LOG_PIPE_TRACE("DenuvoAuth: reusing cached protection result {} denuvo={}",
                            process.DebugString(), auth.denuvo);
@@ -160,6 +160,15 @@ namespace {
 
         auth.scanned = true;
         auth.denuvo = ScanProtection(process.pid).denuvoDetected;
+        // Fallback when signature detection misses a real Denuvo title (some builds
+        // slip both the OEP and legacy-string heuristics). An injected
+        // EncryptedAppTicket for this app means the user intends Denuvo auth, so
+        // engage the auth path instead of giving up.
+        if (!auth.denuvo &&
+            !AppTicket::GetEncryptedTicketFromCredentialStore(appId).empty()) {
+            LOG_PIPE_INFO("DenuvoAuth: scan missed but injected eticket present; treating as Denuvo appid={}", appId);
+            auth.denuvo = true;
+        }
         if (!auth.denuvo) auth.stage = Stage::None;
     }
 
@@ -174,7 +183,7 @@ void Apply(const PipeContext& ctx) {
     ProcessAuth& auth = g_processAuth[ctx.process];
     g_pipeProcess[pipeKey] = ctx.process;
 
-    EnsureScanned(auth, ctx.process);
+    EnsureScanned(auth, ctx.process, ctx.appId);
     auth.OnHandshake(ctx, pipeKey);
 }
 
